@@ -66,6 +66,7 @@ impl<S: Storage + Sync + Send> Directory<S> {
         };
         Ok(Directory {
             current_epoch: azks.get_latest_epoch(),
+            // TODO: Use ownership for storage and avoid clone here
             storage: storage.clone(),
         })
     }
@@ -128,6 +129,7 @@ impl<S: Storage + Sync + Send> Directory<S> {
                 }
             }
         }
+        // TODO: Why do we need this?
         let insertion_set: Vec<(NodeLabel, H::Digest)> =
             update_set.iter().map(|(x, y)| (*x, *y)).collect();
         // ideally the azks and the state would be updated together.
@@ -146,11 +148,17 @@ impl<S: Storage + Sync + Send> Directory<S> {
         }
         info!("Starting database insertion");
 
+        // [evanau reading] update set, which is a vec of (uname label, hashed keys),
+        // is written to azks then azks is written to DB
+        // user_data_update_set, which is a vec of value states, is written to
+        // DB
+
         current_azks
             .batch_insert_leaves::<_, H>(&self.storage, insertion_set)
             .await?;
 
         // batch all the inserts into a single transactional write to storage
+        // TODO: DO we need to clone the current azks?
         let mut updates = vec![DbRecord::Azks(current_azks.clone())];
         for update in user_data_update_set.into_iter() {
             updates.push(DbRecord::ValueState(update));
@@ -248,7 +256,7 @@ impl<S: Storage + Sync + Send> Directory<S> {
         }
     }
 
-    /// Returns an AppendOnlyProof for the leaves inseted into the underlying tree between
+    /// Returns an AppendOnlyProof for the leaves inserted into the underlying tree between
     /// the epochs audit_start_ep and audit_end_ep.
     pub async fn audit<H: Hasher>(
         &self,
@@ -308,6 +316,7 @@ impl<S: Storage + Sync + Send> Directory<S> {
         ]);
         let label_slice = hashed_label.as_ref();
         let hashed_label_bytes = convert_byte_slice_to_array(label_slice);
+        // TODO: change from ne to be/le?
         NodeLabel::new(u64::from_ne_bytes(hashed_label_bytes), 64u32)
     }
 

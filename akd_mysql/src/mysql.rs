@@ -1348,40 +1348,39 @@ impl Storage for AsyncMySqlDatabase {
             debug!("Querying records with JOIN");
             // select all records for provided user names
             let mut params_map = vec![];
-            let (filter, epoch_grouping) = {
+            let (filter, epoch_order) = {
                 // apply the specific filter
                 match flag {
                     ValueStateRetrievalFlag::SpecificVersion(version) => {
                         params_map.push(("the_version", Value::from(version)));
-                        ("WHERE tmp.`version` = :the_version", "tmp.`epoch`")
+                        ("AND full.`version` = :the_version", "")
                     }
                     ValueStateRetrievalFlag::SpecificEpoch(epoch) => {
                         params_map.push(("the_epoch", Value::from(epoch)));
-                        ("WHERE tmp.`epoch` = :the_epoch", "tmp.`epoch`")
+                        ("AND full.`epoch` = :the_epoch", "")
                     }
-                    ValueStateRetrievalFlag::MaxEpoch => ("", "MAX(tmp.`epoch`)"),
-                    ValueStateRetrievalFlag::MinEpoch => ("", "MIN(tmp.`epoch`)"),
+                    ValueStateRetrievalFlag::MaxEpoch => ("", "DESC"),
+                    ValueStateRetrievalFlag::MinEpoch => ("", ""),
                     ValueStateRetrievalFlag::LeqEpoch(epoch) => {
                         params_map.push(("the_epoch", Value::from(epoch)));
-                        (" WHERE tmp.`epoch` <= :the_epoch", "MAX(tmp.`epoch`)")
+                        ("AND full.`epoch` <= :the_epoch", "DESC")
                     }
                 }
             };
+
             let select_statement = format!(
-                r"SELECT full.`username`, full.`version`
-                FROM {} full
-                INNER JOIN (
-                    SELECT tmp.`username`, {} AS `epoch`
-                    FROM {} tmp
-                    INNER JOIN `search_users` su
-                        ON su.`username` = tmp.`username`
-                    {}
-                    GROUP BY tmp.`username`
-                ) epochs
-                    ON epochs.`username` = full.`username`
-                    AND epochs.`epoch` = full.`epoch`
+                r"SELECT filtered.`username`, filtered.`version`
+                FROM (
+                    SELECT full.`username`, full.`version`,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY full.`username` ORDER BY full.`epoch` {}
+                        ) as row_num
+                    FROM {} full, `search_users` su
+                    WHERE su.`username` = full.`username` {}
+                ) as filtered
+                WHERE filtered.row_num = 1
                 ",
-                TABLE_USER, epoch_grouping, TABLE_USER, filter
+                epoch_order, TABLE_USER, filter
             );
 
             let out = if params_map.is_empty() {

@@ -11,7 +11,7 @@ extern crate criterion;
 use akd::append_only_zks::InsertMode;
 use akd::storage::manager::StorageManager;
 use akd::storage::memory::AsyncInMemoryDatabase;
-use akd::{Azks, Node, NodeLabel};
+use akd::{AkdLabel, AkdValue, Azks, Directory, Node, NodeLabel};
 use criterion::{BatchSize, Criterion};
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
@@ -78,6 +78,56 @@ fn batch_insertion(c: &mut Criterion) {
     });
 }
 
+fn publish(c: &mut Criterion) {
+    let num_initial_updates = 10000;
+    let num_updates = 100000;
+
+    let mut rng = StdRng::seed_from_u64(42);
+    let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+
+    // prepare initial updates
+    let mut initial_updates = vec![];
+    for _ in 0..num_initial_updates {
+        let label = AkdLabel::random(&mut rng);
+        let value = AkdValue::random(&mut rng);
+        initial_updates.push((label, value));
+    }
+
+    // prepare updates for benchmark
+    let mut updates = vec![];
+    for _ in 0..num_updates {
+        let label = AkdLabel::random(&mut rng);
+        let value = AkdValue::random(&mut rng);
+        updates.push((label, value));
+    }
+
+    // benchmark publish
+    let id = format!(
+        "Publish ({} initial updates, {} inserted updates)",
+        num_initial_updates, num_updates
+    );
+    c.bench_function(&id, move |b| {
+        b.iter_batched(
+            || {
+                let database = AsyncInMemoryDatabase::new();
+                let db = StorageManager::new(database, None, None, None);
+                let vrf = akd::ecvrf::HardCodedAkdVRF {};
+                let directory = runtime.block_on(Directory::new(db, vrf, false)).unwrap();
+
+                // publish initial leaves as part of setup
+                runtime
+                    .block_on(directory.publish(initial_updates.clone()))
+                    .unwrap();
+                (directory, updates.clone())
+            },
+            |(directory, updates)| {
+                runtime.block_on(directory.publish(updates)).unwrap();
+            },
+            BatchSize::PerIteration,
+        );
+    });
+}
+
 fn random_label(rng: &mut impl rand::Rng) -> NodeLabel {
     NodeLabel {
         label_val: rng.gen::<[u8; 32]>(),
@@ -85,5 +135,5 @@ fn random_label(rng: &mut impl rand::Rng) -> NodeLabel {
     }
 }
 
-criterion_group!(azks_benches, batch_insertion);
+criterion_group!(azks_benches, batch_insertion, publish);
 criterion_main!(azks_benches);
